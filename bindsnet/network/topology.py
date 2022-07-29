@@ -246,7 +246,8 @@ class Connection(AbstractConnection):
         ``self.norm``.
         """
         if self.norm is not None:
-            w_abs_sum = self.w.abs().sum(0).unsqueeze(0)
+            #w_abs_sum = self.w.abs().sum(0).unsqueeze(0)
+            w_abs_sum = self.w.square().sum(0).sqrt().unsqueeze(0)
             w_abs_sum[w_abs_sum == 0] = 1.0
             self.w *= self.norm / w_abs_sum
 

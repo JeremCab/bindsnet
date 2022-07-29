@@ -1003,6 +1003,7 @@ class DiehlAndCookNodes(Nodes):
         tc_theta_decay: Union[float, torch.Tensor] = 1e7,
         lbound: float = None,
         one_spike: bool = True,
+        max_n_spikes: int = None,
         **kwargs,
     ) -> None:
         # language=rst
@@ -1035,7 +1036,6 @@ class DiehlAndCookNodes(Nodes):
             trace_scale=trace_scale,
             sum_input=sum_input,
         )
-
         self.register_buffer("rest", torch.tensor(rest))  # Rest voltage.
         self.register_buffer("reset", torch.tensor(reset))  # Post-spike reset voltage.
         self.register_buffer("thresh", torch.tensor(thresh))  # Spike threshold voltage.
@@ -1065,6 +1065,7 @@ class DiehlAndCookNodes(Nodes):
 
         self.lbound = lbound  # Lower bound of voltage.
         self.one_spike = one_spike  # One spike per timestep.
+        self.max_n_spikes = max_n_spikes
 
     def forward(self, x: torch.Tensor) -> None:
         # language=rst
@@ -1103,6 +1104,17 @@ class DiehlAndCookNodes(Nodes):
                 _any = _any.nonzero()
                 self.s.zero_()
                 self.s.view(self.batch_size, -1)[_any, ind] = 1
+        
+        # Choose max number of neurons to spike.
+        if self.max_n_spikes:
+            _any = self.s.view(self.batch_size, -1).sum(1) > self.max_n_spikes
+            _ind = torch.multinomial(
+                self.s.float().view(self.batch_size, -1)[_any], self.max_n_spikes
+            )
+            _any = torch.where(_any)[0]
+            self.s.view(self.batch_size, -1)[_any, :] = 0
+            _any = _any.expand(self.max_n_spikes, _any.shape[0]).t()
+            self.s.view(self.batch_size, -1)[_any, _ind] = 1
 
         # Voltage clipping to lower bound.
         if self.lbound is not None:

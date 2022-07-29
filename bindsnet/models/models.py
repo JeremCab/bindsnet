@@ -7,8 +7,8 @@ from torch.nn.modules.utils import _pair
 
 from bindsnet.learning import PostPre
 from bindsnet.network import Network
-from bindsnet.network.nodes import DiehlAndCookNodes, Input, LIFNodes
-from bindsnet.network.topology import Connection, LocalConnection
+from bindsnet.network.nodes import DiehlAndCookNodes, Input, LIFNodes, IFNodes
+from bindsnet.network.topology import Connection, LocalConnection, SparseConnection, Conv2dConnection
 
 
 class TwoLayerNetwork(Network):
@@ -300,6 +300,425 @@ class DiehlAndCook2015v2(Network):
         )
         self.add_connection(recurrent_connection, source="Y", target="Y")
 
+        
+class DiehlAndCook2015v3(Network):
+    # language=rst
+    """
+    Slightly modifies the spiking neural network architecture from `(Diehl & Cook 2015)
+    <https://www.frontiersin.org/articles/10.3389/fncom.2015.00099/full>`_ by removing
+    the inhibitory layer and replacing it with a recurrent inhibitory connection in the
+    output layer (what used to be the excitatory layer).
+    """
+
+    def __init__(
+        self,
+        n_inpt: int,
+        n_neurons: int = 100,
+        inh: float = 17.5,
+        dt: float = 1.0,
+        nu: Optional[Union[float, Sequence[float]]] = (1e-4, 1e-2),
+        reduction: Optional[callable] = None,
+        wmin: Optional[float] = 0.0,
+        wmax: Optional[float] = 1.0,
+        norm: float = 78.4,
+        theta_plus: float = 0.05,
+        tc_theta_decay: float = 1e7,
+        inpt_shape: Optional[Iterable[int]] = None,
+        batch_size: int = 1,
+        **kwargs
+    ) -> None:
+        # language=rst
+        """
+        Constructor for class ``DiehlAndCook2015v2``.
+
+        :param n_inpt: Number of input neurons. Matches the 1D size of the input data.
+        :param n_neurons: Number of excitatory, inhibitory neurons.
+        :param inh: Strength of synapse weights from inhibitory to excitatory layer.
+        :param dt: Simulation time step.
+        :param nu: Single or pair of learning rates for pre- and post-synaptic events,
+            respectively.
+        :param reduction: Method for reducing parameter updates along the minibatch
+            dimension.
+        :param wmin: Minimum allowed weight on input to excitatory synapses.
+        :param wmax: Maximum allowed weight on input to excitatory synapses.
+        :param norm: Input to excitatory layer connection weights normalization
+            constant.
+        :param theta_plus: On-spike increment of ``DiehlAndCookNodes`` membrane
+            threshold potential.
+        :param tc_theta_decay: Time constant of ``DiehlAndCookNodes`` threshold
+            potential decay.
+        :param inpt_shape: The dimensionality of the input layer.
+        """
+        super().__init__(dt=dt, batch_size=batch_size)
+
+        self.n_inpt = n_inpt
+        self.inpt_shape = inpt_shape
+        self.n_neurons = n_neurons
+        self.inh = inh
+        
+        # input layer
+        input_layer = Input(
+            n=self.n_inpt, shape=self.inpt_shape, traces=True, tc_trace=20.0
+        )
+        
+        # SOM layer
+        output_layer = DiehlAndCookNodes(
+            n=self.n_neurons,
+            traces=True,
+            rest=-65.0,
+            reset=-60.0,
+            thresh=-52.0,
+            refrac=5,
+            tc_decay=100.0,
+            tc_trace=20.0,
+            theta_plus=theta_plus,
+            tc_theta_decay=tc_theta_decay,
+        )
+        
+        # add layers
+        self.add_layer(input_layer, name="X")
+        self.add_layer(output_layer, name="Y")
+        
+        # input exc weights
+        w = 0.3 * torch.rand(self.n_inpt, self.n_neurons)
+        input_connection = Connection(
+            source=input_layer,
+            target=output_layer,
+            w=w,
+            update_rule=PostPre,
+            nu=nu,
+            reduction=reduction,
+            wmin=wmin,
+            wmax=wmax,
+            norm=norm,
+        )
+        
+        # inh recurrent weights
+#         w = -self.inh * (
+#             torch.ones(self.n_neurons, self.n_neurons)
+#             - torch.diag(torch.ones(self.n_neurons))
+#         )
+#         recurrent_connection = Connection(
+#             source=output_layer,
+#             target=output_layer,
+#             w=w,
+#             wmin=-self.inh,
+#             wmax=0,
+#         )
+        
+        # exc recurrent weights
+#         w = 0.1 * torch.rand(self.n_neurons, self.n_neurons)
+        all_but_diag = torch.ones(self.n_neurons, self.n_neurons)
+        all_but_diag -= torch.diag(torch.ones(self.n_neurons))
+        w = 0.1 * all_but_diag -self.inh * (
+            torch.ones(self.n_neurons, self.n_neurons)
+            - torch.diag(torch.ones(self.n_neurons))
+        )
+        recurrent_exc_connection = Connection(
+            source=output_layer,
+            target=output_layer,
+            w=w,
+            update_rule=PostPre,
+            nu=nu,
+            reduction=reduction,
+            wmin=-200,
+            wmax=100,
+            norm=200,
+        )
+        
+        # add connections
+        self.add_connection(input_connection, source="X", target="Y")
+#         self.add_connection(recurrent_connection, source="Y", target="Y")
+        self.add_connection(recurrent_exc_connection, source="Y", target="Y")
+
+    
+class SCNN(Network):
+    # language=rst
+    """
+    Slightly modifies the spiking neural network architecture from `(Diehl & Cook 2015)
+    <https://www.frontiersin.org/articles/10.3389/fncom.2015.00099/full>`_ by removing
+    the inhibitory layer and replacing it with a recurrent inhibitory connection in the
+    output layer (what used to be the excitatory layer).
+    """
+
+    def __init__(
+        self,
+        n_input: int,
+        n_neurons: int = 100,
+        inh: float = 120,
+        inter_inh: float = 2,
+        dt: float = 1.0,
+        nu: Optional[Union[float, Sequence[float]]] = (1e-4, 1e-2),
+        reduction: Optional[callable] = None,
+        wmin: Optional[float] = 0.0,
+        wmax: Optional[float] = 1.0,
+        norm: float = 78.4,
+        theta_plus: float = 0.05,
+        tc_theta_decay: float = 1e7,
+        input_shape: Optional[Iterable[int]] = None,
+        batch_size: int = 1,
+        n_classes: int = 10,
+        n_part: int = 4,
+        **kwargs
+    ) -> None:
+        # language=rst
+        """
+        Constructor for class ``DiehlAndCook2015v2``.
+
+        :param n_input: Number of input neurons. Matches the 1D size of the input data.
+        :param n_neurons: Number of excitatory, inhibitory neurons.
+        :param inh: Strength of synapse weights from inhibitory to excitatory layer.
+        :param dt: Simulation time step.
+        :param nu: Single or pair of learning rates for pre- and post-synaptic events,
+            respectively.
+        :param reduction: Method for reducing parameter updates along the minibatch
+            dimension.
+        :param wmin: Minimum allowed weight on input to excitatory synapses.
+        :param wmax: Maximum allowed weight on input to excitatory synapses.
+        :param norm: Input to excitatory layer connection weights normalization
+            constant.
+        :param theta_plus: On-spike increment of ``DiehlAndCookNodes`` membrane
+            threshold potential.
+        :param tc_theta_decay: Time constant of ``DiehlAndCookNodes`` threshold
+            potential decay.
+        :param input_shape: The dimensionality of the input layer.
+        """
+        super().__init__(dt=dt, batch_size=batch_size)
+
+        self.n_input = n_input
+        self.input_shape = input_shape
+        self.n_neurons = n_neurons
+        
+        
+        X_layer = Input(
+            n=self.n_input, shape=self.input_shape, traces=True, tc_trace=20.0
+        )
+        self.add_layer(X_layer, name="X")
+        
+        Y_layer = DiehlAndCookNodes(
+            n=self.n_neurons,
+            traces=True,
+            rest=-65.0,
+            reset=-60.0,
+            thresh=-52.0,
+            refrac=5,
+            tc_decay=100.0,
+            tc_trace=20.0,
+            theta_plus=theta_plus,
+            tc_theta_decay=tc_theta_decay,
+        )
+        self.add_layer(Y_layer, name="Y")
+        
+        YY_connection = Connection(
+            source=Y_layer,
+            target=Y_layer,
+            w= self.inhib_weights(inh,n_classes, inter_inh),
+            wmin=-inh,
+            wmax=0,
+        )
+        self.add_connection(YY_connection, source="Y", target="Y")
+        
+        for a in range(n_part):
+            for b in range(n_part):
+                root=int(self.n_input**0.5)
+                size=int(root/n_part)
+                
+                IF_layer = IFNodes(
+                    n=size**2,
+                    traces=True,
+                )
+                self.add_layer(IF_layer, name = f"IF{a}{b}")
+                
+                w=torch.zeros(root,root,size**2)
+                w[a*size:(a+1)*size,b*size:(b+1)*size,:]=50*torch.eye(size**2).view(size, size, size**2)
+                w=w.view(self.n_input,size**2)
+                
+                connection = Connection(
+                    source=X_layer,
+                    target=IF_layer,
+                    w=w,
+                )
+                self.add_connection(connection, source="X", target=f"IF{a}{b}")
+                
+                layer = DiehlAndCookNodes(
+                    n=size**2,
+                    traces=True,
+                    rest=-65.0,
+                    reset=-60.0,
+                    thresh=-52.0,
+                    refrac=5,
+                    tc_decay=100.0,
+                    tc_trace=20.0,
+                    theta_plus=theta_plus,
+                    tc_theta_decay=tc_theta_decay,
+                )
+                self.add_layer(layer, name = f"{a}{b}")
+           
+                w=0.3* torch.rand(size**2, size**2)
+                connection = Connection(
+                    source=IF_layer,
+                    target=layer,
+                    w=w,
+                    update_rule=PostPre,
+                    nu=nu,
+                    reduction=reduction,
+                    norm=norm,
+                )
+                self.add_connection(connection, source=f"IF{a}{b}", target=f"{a}{b}")
+                
+                connection = Connection(
+                    source=layer,
+                    target=layer,
+                    w= -inh*(torch.ones(size**2)-torch.eye(size**2)),
+                    wmin=-inh,
+                    wmax=0,
+                )
+                self.add_connection(connection, source=f"{a}{b}", target=f"{a}{b}")
+    
+                connection = Connection(
+                    source=layer,
+                    target=Y_layer,
+                    w=0.3 * torch.rand(size**2, self.n_neurons),
+                    update_rule=PostPre,
+                    nu=nu,
+                    reduction=reduction,
+                    norm=norm,
+                )
+                self.add_connection(connection, source=f"{a}{b}", target="Y")
+                
+ 
+    def inhib_weights(self, inh, n_classes, inter_inh):
+        w = -inh * (
+        torch.ones(self.n_neurons, self.n_neurons)
+        - torch.eye(self.n_neurons)
+        )
+        for i in range(n_classes):
+            a, b =i*self.n_neurons//n_classes, (i+1)*self.n_neurons//n_classes
+            #             w[a:b,a:b]=-inter_inh*(torch.ones(b-a, b-a)-torch.eye(b-a))
+            for x in range(a,b):
+                for y in range(a,b):
+                    w[x,y]=-inter_inh*(((x-y+n_classes*1.5)%n_classes-n_classes/2)**2)
+        return w
+
+    
+    
+class TenClasses(Network):
+    # language=rst
+    """
+    Slightly modifies the spiking neural network architecture from `(Diehl & Cook 2015)
+    <https://www.frontiersin.org/articles/10.3389/fncom.2015.00099/full>`_ by removing
+    the inhibitory layer and replacing it with a recurrent inhibitory connection in the
+    output layer (what used to be the excitatory layer).
+    """
+
+    def __init__(
+        self,
+        n_input: int,
+        n_neurons: int = 100,
+        inh: float = 120,
+        inter_inh: float = 2,
+        dt: float = 1.0,
+        nu: Optional[Union[float, Sequence[float]]] = (1e-4, 1e-2),
+        reduction: Optional[callable] = None,
+        wmin: Optional[float] = 0.0,
+        wmax: Optional[float] = 1.0,
+        norm: float = 78.4,
+        theta_plus: float = 0.05,
+        tc_theta_decay: float = 1e7,
+        input_shape: Optional[Iterable[int]] = None,
+        batch_size: int = 1,
+        n_classes: int = 10,
+        **kwargs
+    ) -> None:
+        # language=rst
+        """
+        Constructor for class ``DiehlAndCook2015v2``.
+
+        :param n_input: Number of input neurons. Matches the 1D size of the input data.
+        :param n_neurons: Number of excitatory, inhibitory neurons.
+        :param inh: Strength of synapse weights from inhibitory to excitatory layer.
+        :param dt: Simulation time step.
+        :param nu: Single or pair of learning rates for pre- and post-synaptic events,
+            respectively.
+        :param reduction: Method for reducing parameter updates along the minibatch
+            dimension.
+        :param wmin: Minimum allowed weight on input to excitatory synapses.
+        :param wmax: Maximum allowed weight on input to excitatory synapses.
+        :param norm: Input to excitatory layer connection weights normalization
+            constant.
+        :param theta_plus: On-spike increment of ``DiehlAndCookNodes`` membrane
+            threshold potential.
+        :param tc_theta_decay: Time constant of ``DiehlAndCookNodes`` threshold
+            potential decay.
+        :param input_shape: The dimensionality of the input layer.
+        """
+        super().__init__(dt=dt, batch_size=batch_size)
+
+        self.n_input = n_input
+        self.input_shape = input_shape
+        self.n_neurons = n_neurons
+        
+        # input layer
+        input_layer = Input(
+            n=self.n_input, shape=self.input_shape, traces=True, tc_trace=20.0
+        )
+        
+        # output layer
+        output_layer = DiehlAndCookNodes(
+            n=self.n_neurons,
+            traces=True,
+            rest=-65.0,
+            reset=-60.0,
+            thresh=-52.0,
+            refrac=5,
+            tc_decay=100.0,
+            tc_trace=20.0,
+            theta_plus=theta_plus,
+            tc_theta_decay=tc_theta_decay,
+        )
+        
+        # add layers
+        self.add_layer(input_layer, name="X")
+        self.add_layer(output_layer, name="Y")
+        
+        # input exc weights
+        w = 0.3 * torch.rand(self.n_input, self.n_neurons)
+        input_connection = Connection(
+            source=input_layer,
+            target=output_layer,
+            w=w,
+            update_rule=PostPre,
+            nu=nu,
+            reduction=reduction,
+            wmin=wmin,
+            wmax=wmax,
+            norm=norm,
+        )
+      
+        recurrent_connection = Connection(
+            source=output_layer,
+            target=output_layer,
+            w= self.inhib_weights(inh,n_classes, inter_inh),
+            wmin=-inh,
+            wmax=0,
+        )
+     
+        # add connections
+        self.add_connection(input_connection, source="X", target="Y")
+        self.add_connection(recurrent_connection, source="Y", target="Y")
+    
+    def inhib_weights(self, inh, n_classes, inter_inh):
+        w = -inh * (
+        torch.ones(self.n_neurons, self.n_neurons)
+        - torch.eye(self.n_neurons)
+        )
+        for i in range(n_classes):
+            a, b =i*self.n_neurons//n_classes, (i+1)*self.n_neurons//n_classes
+            #             w[a:b,a:b]=-inter_inh*(torch.ones(b-a, b-a)-torch.eye(b-a))
+            for x in range(a,b):
+                for y in range(a,b):
+                    w[x,y]=-inter_inh*(((x-y+n_classes*1.5)%n_classes-n_classes/2)**2)
+        return w
 
 class IncreasingInhibitionNetwork(Network):
     # language=rst
@@ -312,8 +731,8 @@ class IncreasingInhibitionNetwork(Network):
         self,
         n_input: int,
         n_neurons: int = 100,
-        start_inhib: float = 1.0,
-        max_inhib: float = 100.0,
+        start_inhib: float = -10.0,
+        max_inhib: float = -40.0,
         dt: float = 1.0,
         nu: Optional[Union[float, Sequence[float]]] = (1e-4, 1e-2),
         reduction: Optional[callable] = None,
@@ -323,6 +742,7 @@ class IncreasingInhibitionNetwork(Network):
         theta_plus: float = 0.05,
         tc_theta_decay: float = 1e7,
         inpt_shape: Optional[Iterable[int]] = None,
+        batch_size: int = 1
     ) -> None:
         # language=rst
         """
@@ -346,7 +766,7 @@ class IncreasingInhibitionNetwork(Network):
             potential decay.
         :param inpt_shape: The dimensionality of the input layer.
         """
-        super().__init__(dt=dt)
+        super().__init__(dt=dt, batch_size=batch_size)
 
         self.n_input = n_input
         self.n_neurons = n_neurons
@@ -359,7 +779,6 @@ class IncreasingInhibitionNetwork(Network):
         input_layer = Input(
             n=self.n_input, shape=self.inpt_shape, traces=True, tc_trace=20.0
         )
-        self.add_layer(input_layer, name="X")
 
         output_layer = DiehlAndCookNodes(
             n=self.n_neurons,
@@ -373,12 +792,11 @@ class IncreasingInhibitionNetwork(Network):
             theta_plus=theta_plus,
             tc_theta_decay=tc_theta_decay,
         )
-        self.add_layer(output_layer, name="Y")
 
         w = 0.3 * torch.rand(self.n_input, self.n_neurons)
         input_output_conn = Connection(
-            source=self.layers["X"],
-            target=self.layers["Y"],
+            source=input_layer,
+            target=output_layer,
             w=w,
             update_rule=PostPre,
             nu=nu,
@@ -387,12 +805,9 @@ class IncreasingInhibitionNetwork(Network):
             wmax=wmax,
             norm=norm,
         )
-        self.add_connection(input_output_conn, source="X", target="Y")
 
         # add internal inhibitory connections
-        w = torch.ones(self.n_neurons, self.n_neurons) - torch.diag(
-            torch.ones(self.n_neurons)
-        )
+        w = torch.zeros(self.n_neurons, self.n_neurons)
         for i in range(self.n_neurons):
             for j in range(self.n_neurons):
                 if i != j:
@@ -400,11 +815,16 @@ class IncreasingInhibitionNetwork(Network):
                     x2, y2 = j // self.n_sqrt, j % self.n_sqrt
 
                     w[i, j] = np.sqrt(euclidean([x1, y1], [x2, y2]))
-        w = w / w.max()
-        w = (w * self.max_inhib) + self.start_inhib
+                    
+        w = w / w.max() * self.max_inhib + (torch.ones(self.n_neurons, self.n_neurons) - torch.eye(self.n_neurons)) * self.start_inhib
+        
         recurrent_output_conn = Connection(
-            source=self.layers["Y"], target=self.layers["Y"], w=w
+            source=output_layer, target=output_layer, w=w
         )
+        
+        self.add_layer(input_layer, name="X")
+        self.add_layer(output_layer, name="Y")
+        self.add_connection(input_output_conn, source="X", target="Y")
         self.add_connection(recurrent_output_conn, source="Y", target="Y")
 
 

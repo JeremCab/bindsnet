@@ -85,8 +85,8 @@ start_intensity = intensity
 network = IncreasingInhibitionNetwork(
     n_input=784,
     n_neurons=n_neurons,
-    start_inhib=10,
-    max_inhib=-40.0,
+#     start_inhib=10,
+#     max_inhib=-40.0,
     theta_plus=0.05,
     tc_theta_decay=1e7,
     inpt_shape=(1, 28, 28),
@@ -170,7 +170,7 @@ for epoch in range(n_epochs):
 
     # Create a dataloader to iterate and batch data
     dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=1, shuffle=True, num_workers=n_workers, pin_memory=gpu
+        dataset, batch_size=32, shuffle=True, num_workers=n_workers, pin_memory=gpu
     )
 
     pbar = tqdm(total=n_train)
