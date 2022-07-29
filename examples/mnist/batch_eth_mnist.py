@@ -338,6 +338,7 @@ for epoch in range(n_epochs):
     for step, batch in enumerate(snn_mnist.dataloader):
         if step * batch_size > n_train:
             break
+<<<<<<< HEAD
 #         if epoch == 0 and step == update_steps:
 #             snn_mnist.network.connections[("Y", "Y")].w[:]=snn_mnist.network.inhib_weights(inh=inh, n_classes=n_classes, inter_inh=3)
 
@@ -348,6 +349,87 @@ for epoch in range(n_epochs):
             snn_mnist.labels = []
         # Process batch
         snn_mnist.process_batch()
+=======
+
+        # Assign labels to excitatory neurons.
+        if step % update_steps == 0 and step > 0:
+            # Convert the array of labels into a tensor
+            label_tensor = torch.tensor(labels, device=device)
+
+            # Get network predictions.
+            all_activity_pred = all_activity(
+                spikes=spike_record, assignments=assignments, n_labels=n_classes
+            )
+            proportion_pred = proportion_weighting(
+                spikes=spike_record,
+                assignments=assignments,
+                proportions=proportions,
+                n_labels=n_classes,
+            )
+
+            # Compute network accuracy according to available classification strategies.
+            accuracy["all"].append(
+                100
+                * torch.sum(label_tensor.long() == all_activity_pred).item()
+                / len(label_tensor)
+            )
+            accuracy["proportion"].append(
+                100
+                * torch.sum(label_tensor.long() == proportion_pred).item()
+                / len(label_tensor)
+            )
+
+            print(
+                "\nAll activity accuracy: %.2f (last), %.2f (average), %.2f (best)"
+                % (
+                    accuracy["all"][-1],
+                    np.mean(accuracy["all"]),
+                    np.max(accuracy["all"]),
+                )
+            )
+            print(
+                "Proportion weighting accuracy: %.2f (last), %.2f (average), %.2f"
+                " (best)\n"
+                % (
+                    accuracy["proportion"][-1],
+                    np.mean(accuracy["proportion"]),
+                    np.max(accuracy["proportion"]),
+                )
+            )
+
+            # Assign labels to excitatory layer neurons.
+            assignments, proportions, rates = assign_labels(
+                spikes=spike_record,
+                labels=label_tensor,
+                n_labels=n_classes,
+                rates=rates,
+            )
+
+            labels = []
+
+        # Get next input sample.
+        inputs = {"X": batch["encoded_image"]}
+        if gpu:
+            inputs = {k: v.cuda() for k, v in inputs.items()}
+
+        # Remember labels.
+        labels.extend(batch["label"].tolist())
+
+        # Run the network on the input.
+        network.run(inputs=inputs, time=time, input_time_dim=1)
+
+        # Add to spikes recording.
+        s = spikes["Ae"].get("s").permute((1, 0, 2))
+        spike_record[
+            (step * batch_size)
+            % update_interval : (step * batch_size % update_interval)
+            + s.size(0)
+        ] = s
+
+        # Get voltage recording.
+        exc_voltages = exc_voltage_monitor.get("v")
+        inh_voltages = inh_voltage_monitor.get("v")
+>>>>>>> 206e6c5bda47b1042b55a347c5d67593126d67d9
 
         # Optionally plot various simulation information.
         if plot and step % update_steps == 0:
